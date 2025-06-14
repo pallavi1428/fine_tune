@@ -1,47 +1,78 @@
 import json
+from typing import List
+from collections import defaultdict
 
-# File paths - use raw strings to avoid Windows path errors
-input_file = r'C:\Users\PALLAVI\Desktop\magic_ui\fine_tune\training_data00.jsonl'
-output_file = r'C:\Users\PALLAVI\Desktop\magic_ui\fine_tune\check.jsonl'
+# Configuration
+MIN_CODE_LENGTH = 10  # Skip very short code snippets
+VALID_CATEGORIES = {"button", "card", "navbar"}
 
-# Read your input dataset
-with open(input_file, 'r', encoding='utf-8') as f:
-    lines = f.readlines()
+# Optional: Map hex codes to human-readable color names
+COLOR_MAP = {
+    "#552da8": "purple",
+    "#ffffff": "white",
+    "#1c1c1c": "dark gray",
+    "#06b6d4": "teal",
+    "#60a5fa": "light blue"
+}
 
-# This list will hold your improved dataset
-new_dataset = []
+def format_colors(colors: List[str]) -> List[str]:
+    """Convert hex codes to readable names with hex fallback."""
+    return [f"{COLOR_MAP.get(c.lower(), c)} ({c})" for c in colors]
 
-for line in lines:
-    data = json.loads(line)
+def clean_text(text: str) -> str:
+    """Clean and normalize text."""
+    return ' '.join(text.strip().split()).replace('“', '"').replace('”', '"')
 
-    # Extract prompt and code exactly as is
-    prompt = data['prompt']
-    code = data['code']
+# Load dataset
+with open(r'C:\Users\PALLAVI\Desktop\magic_ui\fine_tune\training_data00.jsonl', 'r', encoding='utf-8') as f:
+    data = [json.loads(line) for line in f if line.strip()]
 
-    # Extract metadata fields if available
-    if 'metadata' in data:
-        metadata = data['metadata']
-        category = metadata.get('category', '')
-        tags = ', '.join(metadata.get('tags', []))
-        colors = ', '.join(metadata.get('colors', []))
+processed_data = []
+skipped = 0
+unknown_categories = defaultdict(int)
 
-        # Create metadata string to append to prompt
-        metadata_string = f"\n\nAdditional Details:\nCategory: {category}\nTags: {tags}\nColors: {colors}"
-    else:
-        metadata_string = ""
+for item in data:
+    code = item.get('code', '')
+    if not code or len(code) < MIN_CODE_LENGTH:
+        skipped += 1
+        continue
 
-    # Combine prompt and metadata
-    enhanced_prompt = prompt + metadata_string
+    metadata = item.get('metadata', {})
+    raw_category = clean_text(metadata.get('category', 'component')).lower()
 
-    # Save both prompt and code as required
-    new_dataset.append({
-        'prompt': enhanced_prompt,
-        'code': code
+    # Keep category even if it's not in the valid list
+    category = raw_category
+    if category not in VALID_CATEGORIES:
+        unknown_categories[category] += 1
+
+    tags = list({clean_text(tag).lower() for tag in metadata.get('tags', []) if tag})
+    colors = format_colors([c for c in metadata.get('colors', []) if c])
+
+    # Build prompt (without framework)
+    prompt_parts = [
+        f"Create a {category}",
+        f"Features: {', '.join(tags)}" if tags else None,
+        f"Colors: {', '.join(colors)}" if colors else None
+    ]
+    prompt = '. '.join(filter(None, prompt_parts)) + '.'
+
+    processed_data.append({
+        "prompt": prompt,
+        "completion": clean_text(code),
+        "meta": {
+            "category": category
+        }
     })
 
-# Write the improved dataset to a new file
-with open(output_file, 'w', encoding='utf-8') as f:
-    for item in new_dataset:
+# Save processed dataset
+with open('magic_ui_dataset_general.jsonl', 'w', encoding='utf-8') as f:
+    for item in processed_data:
         f.write(json.dumps(item, ensure_ascii=False) + '\n')
 
-print(f"✅ Dataset cleaned and saved to {output_file}")
+# Summary log
+print(f"✅ Processing complete.\nProcessed: {len(processed_data)} entries\nSkipped: {skipped} entries")
+
+if unknown_categories:
+    print("\n⚠️ Unknown categories encountered:")
+    for cat, count in unknown_categories.items():
+        print(f"- {cat}: {count} times")
